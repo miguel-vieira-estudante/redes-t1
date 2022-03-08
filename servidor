@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import asyncio
 from tcp import Servidor
 import re
@@ -10,14 +11,190 @@ def validar_nome(nome):
 
 def sair(conexao):
     print(conexao, 'conexão fechada')
+    membros_comuns = []
+    for canal in list(servidor.canais.keys()): #for que procura por membros comuns e adiciona na lista
+        if conexao in list(servidor.canais[canal]):
+            for connections in list(servidor.canais[canal]):
+                if not connections in membros_comuns and conexao is not connections:
+                    membros_comuns.append(connections)
+            servidor.canais[canal].remove(conexao) #ao final, remove o usuario q saiu
+
+    for membros in membros_comuns:
+        if conexao == membros_comuns:
+            continue
+        membros.enviar(b':' + get_apelido(conexao) + b' QUIT :Connection closed\r\n') #envia mensagens para os membros comuns
+    if get_apelido(conexao) in servidor.nicks.keys():
+        del servidor.nicks[get_apelido(conexao)]
     conexao.fechar()
+"""
+def sair(conexao):
+    print(conexao, 'conexão fechada')
+    conexao.fechar()
+"""
+# FUNÇÃO PARA AUXILIAR PASSO 3, 4, 5
+# (ACHA O APELIDO BASEADO NA CONEXÃO)
+def get_apelido(conexao):
+    if conexao not in list(servidor.nicks.values()):
+        return None
+    else:
+        for nick, connection in list(servidor.nicks.items()):
+            if conexao == connection:
+                return nick
+
+# COMEÇO PASSO 3 E 4
+# OBSERVAÇÕES ANTES DA CORREÇÃO:
+# Pode ser que o run-grader reclame dos prints.
+# TrEmE == treme, mas na hora de printar eu tô printando TrEmE ao invés de treme
+# Então, é bom ficar de olho se ele reclamar na correção
+#
+# Inclusive, já aproveitei pra remover do dict os apelidos removidos
+def resolve_nick(conexao, apelido):
+
+    apelido_atual = get_apelido(conexao)
+    if apelido_atual == None:
+        has_nick = False
+        apelido_atual = b'*'
+    else:
+        has_nick = True
+        
+    if not validar_nome(apelido):
+        conexao.enviar(b':server 432 ' + apelido_atual + b' ' + apelido + b' :Erroneous nickname\r\n')
+
+    elif apelido.lower() in list(servidor.nicks.keys()):
+        conexao.enviar(b':server 433 ' + apelido_atual + b' ' + apelido + b' :Nickname is already in use\r\n')
+        
+    else:
+        servidor.nicks[apelido.lower()] = conexao
+        if has_nick:
+            del servidor.nicks[apelido_atual.lower()]
+            conexao.enviar(b':' + apelido_atual + b' NICK ' + apelido + b'\r\n')
+        else:
+            conexao.enviar(b':server 001 ' + apelido + b' :Welcome\r\n')
+            conexao.enviar(b':server 422 ' + apelido + b' :MOTD File is missing\r\n')
+# FIM PASSO 3 E 4
+
+# COMEÇO PASSO 5 E 6
+# Aparentemente tudo funcionando
+def resolve_privmsg(remetente, destinatario, mensagem):
+    destinatario = destinatario.lower()
+        
+    # PRIVMSG para canais
+    if destinatario in list(servidor.canais.keys()) and remetente in list(servidor.canais[destinatario]):
+        for conexao in servidor.canais[destinatario]:
+            if conexao != remetente:
+                conexao.enviar(b':' + get_apelido(remetente) + b' PRIVMSG ' + destinatario + b' :' + mensagem + b'\r\n')
+
+    # PRIVMSG entre usuários
+    if destinatario in list(servidor.nicks.keys()) and (apelido_remetente := get_apelido(remetente)) != None:
+        servidor.nicks[destinatario].enviar(b':' + apelido_remetente + b' PRIVMSG ' + destinatario + b' :' + mensagem + b'\r\n')
+# FIM PASSO 5 E 6
+
+# COMEÇO PASSO 6
+def resolve_join(conexao, canal):
+    # se o canal existir
+    print("Entrou resolve_join")
+    print("canais - keys - ", servidor.canais.keys())
+    if canal in list(servidor.canais.keys()):
+        print("entrou if")
+        servidor.canais[canal].append(conexao)
+        apelido_conectante = get_apelido(conexao)
+        for connection in servidor.canais[canal]:	# TALVEZ ESCREVER UMA FUNÇÃO PARA RESOLVER ESSES BROADCASTS?
+            connection.enviar(b':' + apelido_conectante + b' JOIN :' + canal + b'\r\n')
+
+       #COMEÇO PASSO 9
+        #mandar todos os membros do grupo para quem entrou no canal
+        membrosNoSort =[]
+        for conn in list(servidor.canais[canal]):
+            membrosNoSort.append(get_apelido(conn))
+        membrosSort = sorted(membrosNoSort)
+
+        mensagem_base = b':server 353 ' + get_apelido(conexao)+ b' = ' + canal + b' :'
+        mensagem = mensagem_base
+
+        mensagem += membrosSort[0]
+        for i in range(1, len(membrosSort)):
+            print(membrosSort[i])
+            membro = membrosSort[i]
+            if len(mensagem + membro + b' ' + b'\r\n') < 512:
+                print(membro)
+                print("Entrou if")
+                mensagem += b' ' + membro
+            else:
+                conexao.enviar(mensagem + b'\r\n')
+                mensagem = mensagem_base + b' ' + membro
+        print("MENSAGEM ENVIO 353", mensagem)
+        conexao.enviar(mensagem + b'\r\n') # mandar o restante da mensagem com os membros
+        mensagem = b':server 366 ' + get_apelido(conexao) + b' ' + canal+ b' :End of /NAMES list.'
+        print("MENSAGEM ENVIO 366", mensagem)
+        conexao.enviar(mensagem + b'\r\n')
+        
+    #FIM PASSO 9
+
+    # caso não exista o canal
+    elif validar_nome(canal[1:]) and canal.startswith(b'#'):		# OPÇÃO PARA TESTAGEM
+        servidor.canais[canal.lower()] = [conexao]
+        conexao.enviar(b':' + get_apelido(conexao) + b' JOIN :' + canal + b'\r\n')
+        conexao.enviar(b':server 353 ' + get_apelido(conexao)+ b' = ' + canal + b' :' + get_apelido(conexao) + b'\r\n')
+        conexao.enviar(b':server 366 ' + get_apelido(conexao) + b' ' + canal+ b' :End of /NAMES list.\r\n')
+        print("Entrou elif")
+
+    else:
+        conexao.enviar(b':server 403 ' + canal + b' :No such channel\r\n')
+# FIM PASSO 6
+
+# COMEÇO PASSO 7
+def resolve_part(conexao, canal):
+    if canal in list(servidor.canais.keys()) and conexao in list(servidor.canais[canal]):
+        print("Entrou no if do part")
+        for conn_itr in servidor.canais[canal]:
+            conn = conn_itr 
+            conn.enviar(b':' + get_apelido(conexao) +  b' PART ' + canal + b'\r\n')
+        servidor.canais[canal].remove(conexao)
+        print(servidor.canais[canal])
+# FIM PASSO 7
 
 
 def dados_recebidos(conexao, dados):
     if dados == b'':
         return sair(conexao)
+ 
+    dados = resolve_dados_residuais(conexao, dados)
+        
+    for dado in dados:
+        if b'PING' in dado:
+            rest_of_msg = dado.split(b' ', 1)[1]
+            conexao.enviar(b':server PONG server :' + rest_of_msg + b'\n')
+
+        elif (apelido := dado.split(b' ', 1))[0] == b'NICK':
+            # O [:-1] é pra tirar o \n do final
+        	resolve_nick(conexao, apelido[1][:-1])
+        elif (mensagem := dado.split(b' ', 2))[0] == b'PRIVMSG':
+        	resolve_privmsg(conexao, mensagem[1], mensagem[2][1:-1])
+
+        elif (canal := dado.split(b' ', 1))[0] == b'JOIN':
+        	resolve_join(conexao, canal[1][:-1])
+
+        elif (canal := dado.split(b' ', 2))[0] == b'PART':
+            canal[1] = canal[1].replace(b'\r', b'')
+            resolve_part(conexao, canal[1])
+        
     print(conexao, dados)
 
+def resolve_dados_residuais(conexao, dados):
+    if hasattr(conexao, 'dados_residuais'):
+        dados = conexao.dados_residuais + dados
+    if b'\n' in dados:
+        if dados[-1] == b'\n':
+            conexao.dados_residuais = b''
+            return dados.split(b'\n')
+        else:
+            dados = dados.split(b'\n')
+            conexao.dados_residuais = dados[-1]
+            return dados[:-1]
+    else:
+        conexao.dados_residuais = dados
+    return []
+# FIM PASSOS 1 E 2 (MIGUEL)
 
 def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
@@ -25,5 +202,7 @@ def conexao_aceita(conexao):
 
 
 servidor = Servidor(6667)
+servidor.nicks = {}											# PASSO 4
+servidor.canais = {}
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
 asyncio.get_event_loop().run_forever()
